@@ -14,6 +14,9 @@ import gt.edu.umg.core.entities.Dtos.Response.PacienteResponseDto;
 public interface PacienteMapper {
 
 	@Mapping(target = "id", ignore = true)
+	@Mapping(target = "idPaciente", ignore = true)
+	@Mapping(target = "nombres", ignore = true)
+	@Mapping(target = "apellidos", ignore = true)
 	@Mapping(target = "activo", constant = "true")
 	Paciente toEntity(PacienteRequestDto dto);
 
