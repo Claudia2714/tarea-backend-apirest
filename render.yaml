@@ -16,3 +16,4 @@ services:
         value: npg_z8x3kNHyoPiq
       - key: ALLOWED_ORIGINS
         value: https://clinica-frontend.onrender.com,http://localhost:4200
+
