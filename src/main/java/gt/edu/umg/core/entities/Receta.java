@@ -33,3 +33,4 @@ public class Receta {
     @Column(nullable = false)
     private Integer cantidad = 1;
 }
+

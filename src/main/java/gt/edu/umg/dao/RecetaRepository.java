@@ -11,3 +11,4 @@ public interface RecetaRepository extends JpaRepository<Receta, Long> {
     List<Receta> findByCitaId(Long citaId);
     List<Receta> findByCitaPacienteId(Long pacienteId);
 }
+

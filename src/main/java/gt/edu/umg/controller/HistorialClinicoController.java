@@ -105,3 +105,4 @@ public class HistorialClinicoController {
         return ResponseEntity.noContent().build();
     }
 }
+
