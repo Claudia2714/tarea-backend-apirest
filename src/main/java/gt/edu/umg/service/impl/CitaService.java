@@ -42,4 +42,24 @@ public class CitaService {
     public List<Cita> buscarPorMedico(Long medicoId) {
         return citaRepository.findByMedicoId(medicoId);
     }
+
+    /**
+     * Valida si el médico ya tiene una cita activa en la misma fecha y hora.
+     */
+    public boolean tieneConflictoMedico(Long medicoId, LocalDate fecha, String hora, Long citaIdExcluir) {
+        List<Cita> citas = citaRepository.findByMedicoIdAndFechaAndHora(medicoId, fecha, hora);
+        return citas.stream()
+                .filter(c -> !"CANCELADA".equalsIgnoreCase(c.getEstado()))
+                .anyMatch(c -> citaIdExcluir == null || !c.getId().equals(citaIdExcluir));
+    }
+
+    /**
+     * Valida si el paciente ya tiene una cita activa en la misma fecha y hora.
+     */
+    public boolean tieneConflictoPaciente(Long pacienteId, LocalDate fecha, String hora, Long citaIdExcluir) {
+        List<Cita> citas = citaRepository.findByPacienteIdAndFechaAndHora(pacienteId, fecha, hora);
+        return citas.stream()
+                .filter(c -> !"CANCELADA".equalsIgnoreCase(c.getEstado()))
+                .anyMatch(c -> citaIdExcluir == null || !c.getId().equals(citaIdExcluir));
+    }
 }

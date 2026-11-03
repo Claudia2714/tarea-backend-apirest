@@ -13,6 +13,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -46,33 +47,64 @@ public class CitaController {
     }
 
     @PostMapping
-    @Operation(summary = "Crear nueva cita médica")
+    @Operation(summary = "Crear nueva cita médica con validaciones de negocio")
     public ResponseEntity<?> crear(@RequestBody Map<String, Object> body) {
         try {
+            if (body.get("pacienteId") == null || body.get("medicoId") == null ||
+                body.get("fecha") == null || body.get("hora") == null || body.get("motivo") == null) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Todos los campos (paciente, médico, fecha, hora, motivo) son requeridos."));
+            }
+
             Long pacienteId = Long.valueOf(body.get("pacienteId").toString());
             Long medicoId = Long.valueOf(body.get("medicoId").toString());
             String fechaStr = body.get("fecha").toString();
-            String hora = body.get("hora").toString();
-            String motivo = body.get("motivo").toString();
+            String hora = body.get("hora").toString().trim();
+            String motivo = body.get("motivo").toString().trim();
             String estado = body.get("estado") != null ? body.get("estado").toString() : "PROGRAMADA";
 
+            // 1. Regla: Paciente debe existir y estar activo en la base de datos
             Paciente paciente = pacienteRepository.findById(pacienteId)
-                    .orElseThrow(() -> new IllegalArgumentException("Paciente no encontrado con ID: " + pacienteId));
+                    .orElseThrow(() -> new IllegalArgumentException("El paciente seleccionado no se encuentra registrado en el sistema."));
+            if (paciente.getActivo() != null && !paciente.getActivo()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "No se puede agendar cita: El paciente se encuentra inactivo."));
+            }
+
+            // 2. Regla: Médico debe existir en la base de datos
             Medico medico = medicoRepository.findById(medicoId)
-                    .orElseThrow(() -> new IllegalArgumentException("Médico no encontrado con ID: " + medicoId));
+                    .orElseThrow(() -> new IllegalArgumentException("El médico seleccionado no existe o no se encuentra disponible."));
+
+            LocalDate fecha = LocalDate.parse(fechaStr);
+
+            // 3. Regla: Disponibilidad de horario del médico (evitar solapamiento)
+            if (citaService.tieneConflictoMedico(medicoId, fecha, hora, null)) {
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                        "error", String.format("El médico %s no tiene disponibilidad el día %s a las %s horas (ya cuenta con una cita programada).",
+                                medico.getNombre(), fecha, hora)
+                ));
+            }
+
+            // 4. Regla: Disponibilidad del paciente en esa misma fecha y hora
+            if (citaService.tieneConflictoPaciente(pacienteId, fecha, hora, null)) {
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                        "error", String.format("El paciente %s %s ya tiene otra cita agendada para el día %s a las %s.",
+                                paciente.getNombre(), paciente.getApellido(), fecha, hora)
+                ));
+            }
 
             Cita cita = new Cita();
             cita.setPaciente(paciente);
             cita.setMedico(medico);
-            cita.setFecha(java.time.LocalDate.parse(fechaStr));
+            cita.setFecha(fecha);
             cita.setHora(hora);
             cita.setMotivo(motivo);
             cita.setEstado(estado);
 
             Cita guardada = citaService.guardar(cita);
             return new ResponseEntity<>(guardada, HttpStatus.CREATED);
-        } catch (Exception e) {
+        } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Error al procesar la cita: " + e.getMessage()));
         }
     }
 
@@ -81,19 +113,30 @@ public class CitaController {
     public ResponseEntity<?> actualizar(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         try {
             return citaService.obtenerPorId(id).map(citaExistente -> {
+                Long medicoId = citaExistente.getMedico().getId();
+                Long pacienteId = citaExistente.getPaciente().getId();
+                LocalDate fecha = citaExistente.getFecha();
+                String hora = citaExistente.getHora();
+
                 if (body.get("pacienteId") != null) {
-                    Long pacienteId = Long.valueOf(body.get("pacienteId").toString());
-                    pacienteRepository.findById(pacienteId).ifPresent(citaExistente::setPaciente);
+                    pacienteId = Long.valueOf(body.get("pacienteId").toString());
+                    Paciente p = pacienteRepository.findById(pacienteId)
+                            .orElseThrow(() -> new IllegalArgumentException("Paciente no encontrado."));
+                    citaExistente.setPaciente(p);
                 }
                 if (body.get("medicoId") != null) {
-                    Long medicoId = Long.valueOf(body.get("medicoId").toString());
-                    medicoRepository.findById(medicoId).ifPresent(citaExistente::setMedico);
+                    medicoId = Long.valueOf(body.get("medicoId").toString());
+                    Medico m = medicoRepository.findById(medicoId)
+                            .orElseThrow(() -> new IllegalArgumentException("Médico no encontrado."));
+                    citaExistente.setMedico(m);
                 }
                 if (body.get("fecha") != null) {
-                    citaExistente.setFecha(java.time.LocalDate.parse(body.get("fecha").toString()));
+                    fecha = LocalDate.parse(body.get("fecha").toString());
+                    citaExistente.setFecha(fecha);
                 }
                 if (body.get("hora") != null) {
-                    citaExistente.setHora(body.get("hora").toString());
+                    hora = body.get("hora").toString().trim();
+                    citaExistente.setHora(hora);
                 }
                 if (body.get("motivo") != null) {
                     citaExistente.setMotivo(body.get("motivo").toString());
@@ -101,9 +144,19 @@ public class CitaController {
                 if (body.get("estado") != null) {
                     citaExistente.setEstado(body.get("estado").toString());
                 }
+
+                // Si no se cancela, validar que no choque horario
+                if (!"CANCELADA".equalsIgnoreCase(citaExistente.getEstado())) {
+                    if (citaService.tieneConflictoMedico(medicoId, fecha, hora, id)) {
+                        throw new IllegalStateException("Conflicto de horario: El médico ya tiene otra cita en esa fecha y hora.");
+                    }
+                }
+
                 Cita actualizada = citaService.guardar(citaExistente);
                 return ResponseEntity.ok(actualizada);
             }).orElse(ResponseEntity.notFound().build());
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
